@@ -48,6 +48,9 @@ def login(correo: str, contrasena: str, db: Session = Depends(get_db)):
     usuario = db.query(Usuario).filter_by(correo=correo).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    if not verify_password(contrasena, usuario.contrasena):
-        raise HTTPException(status_code=401, detail="Contraseña incorrecta")
-    return {"mensaje": "Inicio de sesión exitoso", "usuario": usuario.nombre}
+    contraseñas = db.query(Usuario.contrasena)
+    for con in contraseñas:
+        print(con)
+        if verify_password(contrasena, con[0]):
+            return {"mensaje": "Inicio de sesión exitoso", "usuario": usuario.nombre}
+    raise HTTPException(status_code=401, detail="Contraseña incorrecta")
