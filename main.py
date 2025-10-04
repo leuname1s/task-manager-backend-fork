@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from db import Base, engine, SessionLocal
 from models import Usuario
 from auth import hash_password, verify_password
-
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -21,36 +22,51 @@ def get_db():
 # ---------------------------
 @app.post("/register")
 def register(correo: str, nombre: str, contrasena: str, db: Session = Depends(get_db)):
-    correo = correo.lower()
-    # Revisar si el correo ya existe
-    if db.query(Usuario).filter_by(correo=correo).first():
-        raise HTTPException(status_code=400, detail="Correo ya registrado")
+    try:
+        correo = correo.lower()
+        # Revisar si el correo ya existe
+        if db.query(Usuario).filter_by(correo=correo).first():
+            raise HTTPException(status_code=400, detail="Correo ya registrado")
+        
+        # Crear usuario con contraseña hasheada
+        nuevo_usuario = Usuario(
+            correo=correo,
+            nombre=nombre,
+            contrasena=hash_password(contrasena)
+        )
+        db.add(nuevo_usuario)
+        db.commit()
+        db.refresh(nuevo_usuario)
+        
+        return JSONResponse(status_code=201, content={"message": "Usuario registrado exitosamente", "usuario": nuevo_usuario.nombre})
+    except IntegrityError as e:
+        db.rollback()  # revertir cambios en caso de error
+        return JSONResponse(status_code=400, content={"error": "Error de integridad: " + str(e.orig)})
     
-    # Crear usuario con contraseña hasheada
-    nuevo_usuario = Usuario(
-        correo=correo,
-        nombre=nombre,
-        contrasena=hash_password(contrasena)
-    )
-    db.add(nuevo_usuario)
-    db.commit()
-    db.refresh(nuevo_usuario)
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
     
-    return {"mensaje": "Usuario registrado exitosamente", "usuario": nuevo_usuario.nombre}
-
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
 # ---------------------------
 # Endpoint: Iniciar sesión
 # ---------------------------
 @app.post("/login")
 def login(correo: str, contrasena: str, db: Session = Depends(get_db)):
-    correo = correo.lower()
+    try:
+        correo = correo.lower()
+        
+        usuario = db.query(Usuario).filter_by(correo=correo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+        contraseñas = db.query(Usuario.contrasena)
+        for con in contraseñas:
+            if verify_password(contrasena, con[0]):
+                return JSONResponse(status_code=200, content={"message": "Inicio de sesión exitoso", "usuario": usuario.nombre})
+        return JSONResponse(status_code=401, content={"error": "Contraseña incorrecta"})
+    except SQLAlchemyError as e:
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
     
-    usuario = db.query(Usuario).filter_by(correo=correo).first()
-    if not usuario:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    contraseñas = db.query(Usuario.contrasena)
-    for con in contraseñas:
-        print(con)
-        if verify_password(contrasena, con[0]):
-            return {"mensaje": "Inicio de sesión exitoso", "usuario": usuario.nombre}
-    raise HTTPException(status_code=401, detail="Contraseña incorrecta")
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
