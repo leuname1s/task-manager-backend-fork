@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -9,6 +10,16 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,          # Dominios que pueden acceder
+    allow_credentials=True,
+    allow_methods=["*"],            # Métodos permitidos (GET, POST, etc.)
+    allow_headers=["*"],            # Headers permitidos
+)
+
 # Dependencia: obtener sesión
 def get_db():
     db = SessionLocal()
@@ -16,6 +27,8 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
 
 # ---------------------------
 # Endpoint: Registrar usuario
@@ -26,8 +39,7 @@ def register(correo: str, nombre: str, contrasena: str, db: Session = Depends(ge
         correo = correo.lower()
         # Revisar si el correo ya existe
         if db.query(Usuario).filter_by(correo=correo).first():
-            raise HTTPException(status_code=400, detail="Correo ya registrado")
-        
+            return JSONResponse(status_code=400, content={"error": "Correo ya registrado"})
         # Crear usuario con contraseña hasheada
         nuevo_usuario = Usuario(
             correo=correo,
@@ -70,3 +82,10 @@ def login(correo: str, contrasena: str, db: Session = Depends(get_db)):
     
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
+# ---------------------------
+# Endpoint: Root, check api status
+# ---------------------------
+@app.get("/")
+def read_root():
+    return {"status": "ok"}
