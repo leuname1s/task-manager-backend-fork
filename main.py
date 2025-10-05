@@ -36,7 +36,7 @@ def get_db():
 # Endpoint: Registrar usuario
 # ---------------------------
 @app.post("/register")
-async def register(user:UserCreate, db: Session = Depends(get_db)):
+def register(user:UserCreate, db: Session = Depends(get_db)):
     try:
         correo = user.correo.lower()
         # Revisar si el correo ya existe
@@ -68,7 +68,7 @@ async def register(user:UserCreate, db: Session = Depends(get_db)):
 # Endpoint: Iniciar sesión
 # ---------------------------
 @app.post("/login")
-async def login(user:UserLogin, db: Session = Depends(get_db)):
+def login(user:UserLogin, db: Session = Depends(get_db)):
     try:
         correo = user.correo.lower()
         
