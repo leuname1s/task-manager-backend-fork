@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from db import Base, engine, SessionLocal
 from models import Usuario
-from schemas import UserCreate, UserResponse, UserLogin
+from schemas import UserCreate, UserLogin
 from auth import hash_password, verify_password
 
 Base.metadata.create_all(bind=engine)
@@ -35,7 +35,7 @@ def get_db():
 # ---------------------------
 # Endpoint: Registrar usuario
 # ---------------------------
-@app.post("/register",response_model=UserResponse)
+@app.post("/register")
 async def register(user:UserCreate, db: Session = Depends(get_db)):
     try:
         correo = user.correo.lower()
@@ -52,8 +52,8 @@ async def register(user:UserCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(nuevo_usuario)
         
-        return nuevo_usuario
-        # return JSONResponse(status_code=201, content={"message": "Usuario registrado exitosamente", "usuario": nuevo_usuario.nombre})
+        
+        return JSONResponse(status_code=201, content={"message": "Usuario registrado exitosamente", "usuario": nuevo_usuario.nombre})
     except IntegrityError as e:
         db.rollback()  # revertir cambios en caso de error
         return JSONResponse(status_code=400, content={"error": "Error de integridad: " + str(e.orig)})
