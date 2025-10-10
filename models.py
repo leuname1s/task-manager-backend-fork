@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String
+from datetime import datetime, timedelta
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
 from db import Base
 
 class Usuario(Base):
@@ -11,3 +13,13 @@ class Usuario(Base):
 
     def __repr__(self):
         return f"<Usuario(id={self.id}, correo='{self.correo}', nombre='{self.nombre}')>"
+    
+class RecuperarContrasenaToken(Base):
+    __tablename__ = "recuperarcontrasenatokens"
+    id = Column(Integer, primary_key=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"))
+    token = Column(String, index=True) 
+    expiracion = Column(DateTime)
+    utilizado = Column(Boolean, default=False)
+    usuario = relationship("Usuario")
+

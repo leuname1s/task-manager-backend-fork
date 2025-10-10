@@ -4,12 +4,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from db import Base, engine
-from models import Usuario
-from schemas import UserCreate, UserLogin, CaptchaRequest
+from models import *
+from schemas import *
 from auth import hash_password, verify_password
 from utils import get_db, send_email
 import os
 import requests
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -106,8 +107,47 @@ def verify_captcha(req: CaptchaRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
     
+# ---------------------------
+# Endpoint: olvide mi contraseña
+# ---------------------------
+@app.post("/forgot-password")
+def forgot_password(email: str, db: Session = Depends(get_db)):
+    user = db.query(Usuario).filter(Usuario.correo == email).first()
+    if not user:
+        return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
 
+    token = secrets.token_hex(3)  # código corto, por ejemplo 'a3f9c1'
+    expires = datetime.now() + timedelta(minutes=10)
+
+    db_token = RecuperarContrasenaToken(usuario_id=user.id, token=token, expiracion=expires)
+    db.add(db_token)
+    db.commit()
+
+    send_email(to=email, subject="Recuperación de contraseña", 
+               body=f"Tu código de recuperación es: {token}")
+
+    return {"message": "Se envió un código de recuperación a tu correo"}
     
+# ---------------------------
+# Endpoint: resetear contraseña
+# ---------------------------
+@app.post("/reset-password")
+def reset_password(email: str, token: str, new_password: str, db: Session = Depends(get_db)):
+    user = db.query(Usuario).filter(Usuario.correo == email).first()
+    if not user:
+        return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
+
+    db_token = db.query(RecuperarContrasenaToken).filter_by(usuario_id=user.id, token=token, utilizado=False).first()
+    if not db_token or db_token.expiracion < datetime.now():
+        return JSONResponse(status_code=400, content={"error":"Código inválido o expirado"})
+
+    # Actualizar contraseña
+    user.contrasena = hash_password(new_password)
+    db_token.utilizado = True
+    db.commit()
+
+    return {"message": "Contraseña actualizada correctamente"}
+
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
