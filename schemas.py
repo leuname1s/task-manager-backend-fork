@@ -12,3 +12,6 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     correo: str
     contraseña: str
+
+class CaptchaRequest(BaseModel):
+    token: str

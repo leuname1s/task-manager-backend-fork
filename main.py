@@ -5,8 +5,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from db import Base, engine, SessionLocal
 from models import Usuario
-from schemas import UserCreate, UserLogin
+from schemas import UserCreate, UserLogin, CaptchaRequest
 from auth import hash_password, verify_password
+import os
+import requests
+SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 
 Base.metadata.create_all(bind=engine)
 
@@ -64,6 +67,7 @@ def register(user:UserCreate, db: Session = Depends(get_db)):
     
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
 # ---------------------------
 # Endpoint: Iniciar sesión
 # ---------------------------
@@ -86,6 +90,22 @@ def login(user:UserLogin, db: Session = Depends(get_db)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
     
+# ---------------------------
+# Endpoint: verificar Captcha
+# ---------------------------    
+@app.post("/api/verify-captcha")
+def verify_captcha(req: CaptchaRequest):
+    try:
+        url = "https://www.google.com/recaptcha/api/siteverify"
+        data = {"secret": SECRET_KEY, "response": req.token}
+        r = requests.post(url, data=data)
+        result = r.json()
+
+        if not result.get("success"):
+            raise JSONResponse(status_code=400, detail="Captcha inválido")
+        return {"success": True}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
