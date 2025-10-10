@@ -1,14 +1,18 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from db import Base, engine, SessionLocal
+from db import Base, engine
 from models import Usuario
 from schemas import UserCreate, UserLogin, CaptchaRequest
 from auth import hash_password, verify_password
+from utils import get_db, send_email
 import os
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 
 Base.metadata.create_all(bind=engine)
@@ -26,12 +30,6 @@ app.add_middleware(
 )
 
 # Dependencia: obtener sesión
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 
@@ -100,12 +98,16 @@ def verify_captcha(req: CaptchaRequest):
         data = {"secret": SECRET_KEY, "response": req.token}
         r = requests.post(url, data=data)
         result = r.json()
-
+        # print("----")
+        # print(result)
         if not result.get("success"):
-            raise JSONResponse(status_code=400, detail="Captcha inválido")
+            return JSONResponse(status_code=400, content={"error": "Captcha inválido"})
         return {"success": True}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
+
+    
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
