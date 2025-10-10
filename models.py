@@ -10,7 +10,10 @@ class Usuario(Base):
     correo = Column(String(120), unique=True, nullable=False)
     nombre = Column(String(100), nullable=False)
     contrasena = Column(String(200), nullable=False)
-
+    intentos_fallidos = Column(Integer, default=0)
+    bloqueado = Column(Boolean, default=False)
+    ultimo_intento_fallido = Column(DateTime, default=None)
+    
     def __repr__(self):
         return f"<Usuario(id={self.id}, correo='{self.correo}', nombre='{self.nombre}')>"
     

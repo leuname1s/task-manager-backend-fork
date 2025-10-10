@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 load_dotenv()
 SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
 
+LOCK_TIME_MINUTES = 5
+MAX_ATTEMPTS = 4
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
@@ -76,17 +78,43 @@ def login(user:UserLogin, db: Session = Depends(get_db)):
         correo = user.correo.lower()
         
         usuario = db.query(Usuario).filter_by(correo=correo).first()
+        
         if not usuario:
             return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+        
+        if usuario.bloqueado:
+            if usuario.ultimo_intento_fallido and datetime.now() - usuario.ultimo_intento_fallido < timedelta(minutes=LOCK_TIME_MINUTES):
+                return JSONResponse(status_code=403, content={"error":"Cuenta bloqueada temporalmente, intente más tarde"})
+            else:
+                # Se desbloquea automáticamente pasado el tiempo
+                usuario.bloqueado = False
+                usuario.intentos_fallidos = 0
+            
         contraseñas = db.query(Usuario.contrasena)
         for con in contraseñas:
             if verify_password(user.contraseña, con[0]):
+                usuario.bloqueado = False
+                usuario.intentos_fallidos = 0
+                db.commit()
                 return JSONResponse(status_code=200, content={"message": "Inicio de sesión exitoso", "usuario": usuario.nombre})
+        
+        usuario.intentos_fallidos += 1
+        usuario.ultimo_intento_fallido = datetime.now()
+        
+        if usuario.intentos_fallidos >= MAX_ATTEMPTS:
+            usuario.bloqueado = True
+            db.commit()
+            return JSONResponse(status_code=403, content={"error":"Demasiados intentos fallidos, cuenta bloqueada temporalmente"})
+
+        db.commit()
         return JSONResponse(status_code=401, content={"error": "Contraseña incorrecta"})
+    
     except SQLAlchemyError as e:
+        db.rollback()
         return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
     
     except Exception as e:
+        db.rollback()
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
     
 # ---------------------------
@@ -112,42 +140,56 @@ def verify_captcha(req: CaptchaRequest):
 # ---------------------------
 @app.post("/forgot-password")
 def forgot_password(email: str, db: Session = Depends(get_db)):
-    user = db.query(Usuario).filter(Usuario.correo == email).first()
-    if not user:
-        return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
+    try:
+        user = db.query(Usuario).filter(Usuario.correo == email).first()
+        if not user:
+            return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
 
-    token = secrets.token_hex(3)  # código corto, por ejemplo 'a3f9c1'
-    expires = datetime.now() + timedelta(minutes=10)
+        token = secrets.token_hex(3)  # código corto, por ejemplo 'a3f9c1'
+        expires = datetime.now() + timedelta(minutes=10)
 
-    db_token = RecuperarContrasenaToken(usuario_id=user.id, token=token, expiracion=expires)
-    db.add(db_token)
-    db.commit()
+        db_token = RecuperarContrasenaToken(usuario_id=user.id, token=token, expiracion=expires)
+        db.add(db_token)
+        db.commit()
 
-    send_email(to=email, subject="Recuperación de contraseña", 
-               body=f"Tu código de recuperación es: {token}")
+        send_email(to=email, subject="Recuperación de contraseña", 
+                body=f"Tu código de recuperación es: {token}")
 
-    return {"message": "Se envió un código de recuperación a tu correo"}
+        return {"message": "Se envió un código de recuperación a tu correo"}
     
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
 # ---------------------------
 # Endpoint: resetear contraseña
 # ---------------------------
 @app.post("/reset-password")
 def reset_password(email: str, token: str, new_password: str, db: Session = Depends(get_db)):
-    user = db.query(Usuario).filter(Usuario.correo == email).first()
-    if not user:
-        return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
+    try:
+        user = db.query(Usuario).filter(Usuario.correo == email).first()
+        if not user:
+            return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
 
-    db_token = db.query(RecuperarContrasenaToken).filter_by(usuario_id=user.id, token=token, utilizado=False).first()
-    if not db_token or db_token.expiracion < datetime.now():
-        return JSONResponse(status_code=400, content={"error":"Código inválido o expirado"})
+        db_token = db.query(RecuperarContrasenaToken).filter_by(usuario_id=user.id, token=token, utilizado=False).first()
+        if not db_token or db_token.expiracion < datetime.now():
+            return JSONResponse(status_code=400, content={"error":"Código inválido o expirado"})
 
-    # Actualizar contraseña
-    user.contrasena = hash_password(new_password)
-    db_token.utilizado = True
-    db.commit()
+        # Actualizar contraseña
+        user.contrasena = hash_password(new_password)
+        db_token.utilizado = True
+        db.commit()
 
-    return {"message": "Contraseña actualizada correctamente"}
-
+        return {"message": "Contraseña actualizada correctamente"}
+    
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})   
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
