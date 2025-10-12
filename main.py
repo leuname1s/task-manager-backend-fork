@@ -3,15 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from db import Base, engine
-from models import *
-from schemas import *
-from auth import hash_password, verify_password
-from utils import get_db, send_email
 import os
 import requests
 import secrets
+from db import Base, engine
+from models import *
+from schemas import *
 from dotenv import load_dotenv
+from auth import hash_password, verify_password
+from utils import get_db, send_email
 
 load_dotenv()
 SECRET_KEY = os.getenv("RECAPTCHA_SECRET_KEY")
@@ -138,7 +138,7 @@ def verify_captcha(req: CaptchaRequest):
 # ---------------------------
 # Endpoint: olvide mi contraseña
 # ---------------------------
-@app.post("/forgot-password")
+""" @app.post("/forgot-password")
 def forgot_password(email: str, db: Session = Depends(get_db)):
     try:
         user = db.query(Usuario).filter(Usuario.correo == email).first()
@@ -162,24 +162,28 @@ def forgot_password(email: str, db: Session = Depends(get_db)):
         return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
     except Exception as e:
         db.rollback()
-        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)}) """
+    
 # ---------------------------
 # Endpoint: resetear contraseña
 # ---------------------------
 @app.post("/reset-password")
-def reset_password(email: str, token: str, new_password: str, db: Session = Depends(get_db)):
+def reset_password(credentials:ResetPasswordRequest, db: Session = Depends(get_db)):
     try:
+        email = credentials.correo
+        new_password = credentials.nueva_contraseña
+        
         user = db.query(Usuario).filter(Usuario.correo == email).first()
         if not user:
             return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
 
-        db_token = db.query(RecuperarContrasenaToken).filter_by(usuario_id=user.id, token=token, utilizado=False).first()
-        if not db_token or db_token.expiracion < datetime.now():
-            return JSONResponse(status_code=400, content={"error":"Código inválido o expirado"})
+        # db_token = db.query(RecuperarContrasenaToken).filter_by(usuario_id=user.id, token=token, utilizado=False).first()
+        # if not db_token or db_token.expiracion < datetime.now():
+        #     return JSONResponse(status_code=400, content={"error":"Código inválido o expirado"})
 
         # Actualizar contraseña
         user.contrasena = hash_password(new_password)
-        db_token.utilizado = True
+        # db_token.utilizado = True
         db.commit()
 
         return {"message": "Contraseña actualizada correctamente"}

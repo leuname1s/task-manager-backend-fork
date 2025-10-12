@@ -1,4 +1,5 @@
 from pydantic import BaseModel, ConfigDict
+from typing import Optional
 
 # Para registro de usuario
 class UserCreate(BaseModel):
@@ -15,3 +16,8 @@ class UserLogin(BaseModel):
 
 class CaptchaRequest(BaseModel):
     token: str
+    
+class ResetPasswordRequest(BaseModel):
+    correo: str
+    token: Optional[str]
+    nueva_contraseña: str
