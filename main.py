@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 import os
 import requests
 import secrets
+from typing import Dict, Annotated
 from db import Base, engine
 from models import *
 from schemas import *
@@ -31,10 +32,6 @@ app.add_middleware(
     allow_methods=["*"],            # Métodos permitidos (GET, POST, etc.)
     allow_headers=["*"],            # Headers permitidos
 )
-
-# Dependencia: obtener sesión
-
-
 
 # ---------------------------
 # Endpoint: Registrar usuario
@@ -136,35 +133,6 @@ def verify_captcha(req: CaptchaRequest):
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
     
 # ---------------------------
-# Endpoint: olvide mi contraseña
-# ---------------------------
-""" @app.post("/forgot-password")
-def forgot_password(email: str, db: Session = Depends(get_db)):
-    try:
-        user = db.query(Usuario).filter(Usuario.correo == email).first()
-        if not user:
-            return JSONResponse(status_code=404, content={"error":"Usuario no encontrado"})
-
-        token = secrets.token_hex(3)  # código corto, por ejemplo 'a3f9c1'
-        expires = datetime.now() + timedelta(minutes=10)
-
-        db_token = RecuperarContrasenaToken(usuario_id=user.id, token=token, expiracion=expires)
-        db.add(db_token)
-        db.commit()
-
-        send_email(to=email, subject="Recuperación de contraseña", 
-                body=f"Tu código de recuperación es: {token}")
-
-        return {"message": "Se envió un código de recuperación a tu correo"}
-    
-    except SQLAlchemyError as e:
-        db.rollback()
-        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
-    except Exception as e:
-        db.rollback()
-        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)}) """
-    
-# ---------------------------
 # Endpoint: resetear contraseña
 # ---------------------------
 @app.post("/reset-password")
@@ -194,6 +162,247 @@ def reset_password(credentials:ResetPasswordRequest, db: Session = Depends(get_d
     except Exception as e:
         db.rollback()
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: crear proyecto
+# ---------------------------
+@app.post("/proyectos")
+def crear_proyecto(proyecto: ProyectoCreate, x_user_mail: Annotated[str, Header(...)], db: Session = Depends(get_db)):
+    try:
+        correo = x_user_mail.lower()
+        dueño = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not dueño:
+            return JSONResponse(status_code=404, content={"error": "Correo de usuario no encontrado"})
+
+        nuevo_proyecto = Proyecto(
+            nombre=proyecto.nombre,
+            descripcion=proyecto.descripcion,
+            id_dueño=dueño.id
+        )
+        db.add(nuevo_proyecto)
+        db.commit()
+        db.refresh(nuevo_proyecto)
+
+        return JSONResponse(status_code=201, content={"message": "proyecto creado exitosamente", "id_proyecto": nuevo_proyecto.id})
+
+    except IntegrityError as e:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"error": "Error de integridad: " + str(e.orig)})
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: listar proyectos de un usuario por correo
+# ---------------------------
+@app.get("/proyectos", response_model=Dict[int, ProyectoUsuarioInfo])
+def listar_proyectos_usuario(x_user_mail: Annotated[str, Header(...)], db: Session = Depends(get_db)):
+    """
+    Retorna un diccionario donde las claves son los IDs de los proyectos
+    y los valores son la información de cada proyecto.
+    """
+    try:
+        correo = x_user_mail.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not usuario:
+            raise JSONResponse(status_code=404, content={"error":"Correo de usuario no encontrado"})
+
+        resultado: Dict[int, dict] = {}
+
+        # Proyectos donde es dueño
+        for proyecto in usuario.proyectos_propios:
+            resultado[proyecto.id] = {
+                "nombre_proyecto": proyecto.nombre,
+                "descripcion": proyecto.descripcion,
+                "fecha_finalizacion": proyecto.fecha_limite,
+                "rol_usuario": "dueño"
+            }
+
+        # Proyectos donde es integrante (puede solaparse con dueño, se sobreescribe si es dueño)
+        for integrante in usuario.proyectos_integrante:
+            proj = getattr(integrante, "proyecto", None)
+            if proj:
+                rol = getattr(integrante, "rol", None)
+                rol_str = rol.value if hasattr(rol, "value") else str(rol) if rol else ""
+                resultado[proj.id] = {
+                    "nombre_proyecto": proj.nombre,
+                    "descripcion": proj.descripcion,
+                    "fecha_finalizacion": proj.fecha_limite,
+                    "rol_usuario": rol_str
+                }
+
+        return resultado
+
+    except SQLAlchemyError as e:
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: eliminar proyecto 
+# ---------------------------
+@app.delete("/proyectos/{proyecto_id}")
+def eliminar_proyecto(proyecto_id: int, x_user_mail: Annotated[str, Header(...)], db: Session = Depends(get_db)):
+    try:
+        correo = x_user_mail.lower()
+        dueño = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not dueño:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        if proyecto.id_dueño != dueño.id:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: no sos el dueño del proyecto"})
+
+        db.delete(proyecto)
+        db.commit()
+
+        return JSONResponse(status_code=200, content={"message": "Proyecto eliminado correctamente", "id_proyecto": proyecto_id})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: agregar integrantes
+# ---------------------------
+@app.post("/proyectos/{proyecto_id}/integrantes")
+def agregar_integrantes(
+    proyecto_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    integrantes_req: IntegrantesAddRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        dueño = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not dueño:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        if proyecto.id_dueño != dueño.id:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: no sos el dueño del proyecto"})
+
+        mapping: Dict[str, str] = integrantes_req.root
+
+        # Validar roles y usuarios
+        roles_invalid = []
+        usuarios_no_existentes = []
+        ya_integrantes = []
+
+        for email_raw, rol in mapping.items():
+            email = email_raw.lower()
+            if rol not in ("editor", "lector"):
+                roles_invalid.append({email: rol})
+                continue
+
+            usuario = db.query(Usuario).filter(Usuario.correo == email).first()
+            if not usuario:
+                usuarios_no_existentes.append(email)
+                continue
+
+            existe = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == usuario.id
+            ).first()
+            if existe:
+                ya_integrantes.append(email)
+
+        if roles_invalid or usuarios_no_existentes or ya_integrantes:
+            return JSONResponse(status_code=400, content={
+                "error": "Validación fallida",
+                "roles_invalidos": roles_invalid,
+                "usuarios_no_existentes": usuarios_no_existentes,
+                "ya_integrantes": ya_integrantes
+            })
+
+        # Agregar integrantes
+        creados = []
+        for email_raw, rol in mapping.items():
+            email = email_raw.lower()
+            usuario = db.query(Usuario).filter(Usuario.correo == email).first()
+            # usuario y rol ya validados
+            role_enum = RolProyecto(rol)  # crear a partir del valor
+            nuevo = ProyectoIntegrante(
+                id_proyecto=proyecto_id,
+                id_usuario=usuario.id,
+                rol=role_enum
+            )
+            db.add(nuevo)
+            creados.append({"email": email, "rol": rol})
+
+        db.commit()
+
+        return JSONResponse(status_code=201, content={"message": "Integrantes agregados exitosamente", "integrantes": creados})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
+# ---------------------------
+# Endpoint: eliminar integrante
+# ---------------------------
+@app.delete("/proyectos/{proyecto_id}/integrantes")
+def eliminar_integrante(
+    proyecto_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    payload: IntegranteRemoveRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        correo_dueño = x_user_mail.lower()
+        dueño = db.query(Usuario).filter(Usuario.correo == correo_dueño).first()
+        if not dueño:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        if proyecto.id_dueño != dueño.id:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: no sos el dueño del proyecto"})
+
+        correo_objetivo = payload.correo.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo_objetivo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario a eliminar no existe"})
+
+        # Evitar eliminar al dueño por este endpoint
+        if usuario.id == proyecto.id_dueño:
+            return JSONResponse(status_code=400, content={"error": "No se puede eliminar al dueño del proyecto"})
+
+        integrante = db.query(ProyectoIntegrante).filter(
+            ProyectoIntegrante.id_proyecto == proyecto_id,
+            ProyectoIntegrante.id_usuario == usuario.id
+        ).first()
+        if not integrante:
+            return JSONResponse(status_code=404, content={"error": "El usuario no es integrante del proyecto"})
+
+        db.delete(integrante)
+        db.commit()
+        return JSONResponse(status_code=200, content={"message": "Integrante eliminado correctamente", "correo": correo_objetivo, "id_proyecto": proyecto_id})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})    
+
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
