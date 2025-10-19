@@ -93,7 +93,7 @@ def login(user:UserLogin, db: Session = Depends(get_db)):
                 usuario.bloqueado = False
                 usuario.intentos_fallidos = 0
                 db.commit()
-                return JSONResponse(status_code=200, content={"message": "Inicio de sesión exitoso", "usuario": usuario.nombre})
+                return JSONResponse(status_code=200, content={"message": "Inicio de sesión exitoso", "usuario": usuario.nombre, "id": usuario.id,"nombre": usuario.nombre,"correo": usuario.correo})
         
         usuario.intentos_fallidos += 1
         usuario.ultimo_intento_fallido = datetime.now()
