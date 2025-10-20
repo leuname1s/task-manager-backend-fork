@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, RootModel
-from typing import Optional, Literal, Dict
+from typing import Optional, Literal, Dict, List
 from datetime import datetime
+from models import EstadoTarea
 # Para registro de usuario
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -29,6 +30,7 @@ class ProyectoCreate(BaseModel):
 class ProyectoUsuarioInfo(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     
+    id: int
     nombre_proyecto: str
     descripcion: Optional[str] = None
     fecha_finalizacion: Optional[datetime] = None
@@ -47,3 +49,32 @@ class IntegrantesAddRequest(RootModel):
     
 class IntegranteRemoveRequest(BaseModel):
     correo: str
+    
+class TareaCreate(BaseModel):
+    titulo: str
+    descripcion: Optional[str] = None
+    fecha_limite: Optional[datetime] = None
+
+class ResponsableResumen(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+        
+    id: int
+    nombre: str
+
+class TareaResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    id_proyecto: int
+    titulo: str
+    descripcion: Optional[str] = None
+    estado: str
+    fecha_creacion: datetime
+    fecha_limite: Optional[datetime] = None
+    responsables: Optional[List[ResponsableResumen]]
+
+class ResponsablesAddRequest(BaseModel):
+    correos: List[str]
+    
+class TareaEstadoUpdate(BaseModel):
+    estado: EstadoTarea

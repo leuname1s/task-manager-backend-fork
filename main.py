@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 import os
 import requests
 import secrets
-from typing import Dict, Annotated
+from typing import Dict, Annotated, List
 from db import Base, engine
 from models import *
 from schemas import *
@@ -181,6 +181,14 @@ def crear_proyecto(proyecto: ProyectoCreate, x_user_mail: Annotated[str, Header(
         )
         db.add(nuevo_proyecto)
         db.commit()
+        
+        integrante_dueño = ProyectoIntegrante(
+            id_proyecto = nuevo_proyecto.id,
+            id_usuario = dueño.id,
+            rol = RolProyecto.dueño
+        )
+        db.add(integrante_dueño)
+        db.commit()
         db.refresh(nuevo_proyecto)
 
         return JSONResponse(status_code=201, content={"message": "proyecto creado exitosamente", "id_proyecto": nuevo_proyecto.id})
@@ -198,28 +206,25 @@ def crear_proyecto(proyecto: ProyectoCreate, x_user_mail: Annotated[str, Header(
 # ---------------------------
 # Endpoint: listar proyectos de un usuario por correo
 # ---------------------------
-@app.get("/proyectos", response_model=Dict[int, ProyectoUsuarioInfo])
+@app.get("/proyectos", response_model=List[ProyectoUsuarioInfo])
 def listar_proyectos_usuario(x_user_mail: Annotated[str, Header(...)], db: Session = Depends(get_db)):
-    """
-    Retorna un diccionario donde las claves son los IDs de los proyectos
-    y los valores son la información de cada proyecto.
-    """
     try:
         correo = x_user_mail.lower()
         usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
         if not usuario:
             raise JSONResponse(status_code=404, content={"error":"Correo de usuario no encontrado"})
 
-        resultado: Dict[int, dict] = {}
+        resultado: List[dict] = []
 
         # Proyectos donde es dueño
         for proyecto in usuario.proyectos_propios:
-            resultado[proyecto.id] = {
+            resultado.append({
+                "id": proyecto.id,
                 "nombre_proyecto": proyecto.nombre,
                 "descripcion": proyecto.descripcion,
                 "fecha_finalizacion": proyecto.fecha_limite,
                 "rol_usuario": "dueño"
-            }
+            })
 
         # Proyectos donde es integrante (puede solaparse con dueño, se sobreescribe si es dueño)
         for integrante in usuario.proyectos_integrante:
@@ -227,12 +232,13 @@ def listar_proyectos_usuario(x_user_mail: Annotated[str, Header(...)], db: Sessi
             if proj:
                 rol = getattr(integrante, "rol", None)
                 rol_str = rol.value if hasattr(rol, "value") else str(rol) if rol else ""
-                resultado[proj.id] = {
+                resultado.append({
+                    "id": proj.id,
                     "nombre_proyecto": proj.nombre,
                     "descripcion": proj.descripcion,
                     "fecha_finalizacion": proj.fecha_limite,
                     "rol_usuario": rol_str
-                }
+                })
 
         return resultado
 
@@ -403,6 +409,321 @@ def eliminar_integrante(
         db.rollback()
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})    
 
+# ---------------------------
+# Endpoint: crear tarea en proyecto
+# ---------------------------
+@app.post("/proyectos/{proyecto_id}/tareas")
+def crear_tarea_en_proyecto(
+    proyecto_id: int,
+    x_user_email: Annotated[str, Header(...)],
+    payload: TareaCreate = Body(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_email.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        # verificar rol: dueño del proyecto o integrante con rol editor
+        autorizado = False
+        if proyecto.id_dueño == usuario.id:
+            autorizado = True
+        else:
+            integrante = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == usuario.id
+            ).first()
+            if integrante and integrante.rol in (RolProyecto.editor, RolProyecto.dueño):
+                autorizado = True
+
+        if not autorizado:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: se requiere rol 'editor' o ser dueño del proyecto"})
+
+        nueva_tarea = Tarea(
+            id_proyecto=proyecto_id,
+            titulo=payload.titulo,
+            descripcion=payload.descripcion,
+            fecha_limite=payload.fecha_limite
+        )
+        db.add(nueva_tarea)
+        db.commit()
+        db.refresh(nueva_tarea)
+
+        return JSONResponse(status_code=201, content={"message": "tarea creada exitosamente", "id_tarea": nueva_tarea.id})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: listar tareas en proyecto
+# ---------------------------
+@app.get("/proyectos/{proyecto_id}/tareas", response_model=List[TareaResponse])
+def listar_tareas_proyecto(
+    proyecto_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        # Verificar que el usuario sea dueño o integrante del proyecto
+        if proyecto.id_dueño != usuario.id:
+            integrante = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == usuario.id
+            ).first()
+            if not integrante:
+                return JSONResponse(status_code=403, content={"error": "No autorizado: no sos integrante del proyecto"})
+
+        tareas = db.query(Tarea).filter(Tarea.id_proyecto == proyecto_id).all()
+        resultado: List[dict] = []
+        for tarea in tareas:
+            responsables_list = []
+            for tr in getattr(tarea, "responsables", []):
+                if getattr(tr, "usuario", None):
+                    responsables_list.append({
+                        "id": tr.usuario.id,
+                        "nombre": tr.usuario.nombre
+                    })
+
+            resultado.append({
+                "id": tarea.id,
+                "id_proyecto": tarea.id_proyecto,
+                "titulo": tarea.titulo,
+                "descripcion": tarea.descripcion,
+                "estado": tarea.estado.value if hasattr(tarea.estado, "value") else str(tarea.estado),
+                "fecha_creacion": tarea.fecha_creacion,
+                "fecha_limite": tarea.fecha_limite,
+                "responsables": responsables_list
+            })
+
+        return resultado
+
+    except SQLAlchemyError as e:
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
+@app.delete("/proyectos/{proyecto_id}/tareas/{tarea_id}")
+def eliminar_tarea(
+    proyecto_id: int,
+    tarea_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        # Verificar permiso: dueño o integrante con rol editor
+        if proyecto.id_dueño != usuario.id:
+            integrante = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == usuario.id
+            ).first()
+            if not integrante or integrante.rol != RolProyecto.editor:
+                return JSONResponse(status_code=403, content={"error": "No autorizado: se requiere rol 'editor' o ser dueño del proyecto"})
+
+        tarea = db.query(Tarea).filter(Tarea.id == tarea_id, Tarea.id_proyecto == proyecto_id).first()
+        if not tarea:
+            return JSONResponse(status_code=404, content={"error": "Tarea no encontrada en el proyecto"})
+
+        db.delete(tarea)
+        db.commit()
+        return JSONResponse(status_code=200, content={"message": "Tarea eliminada correctamente", "id_tarea": tarea_id})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: agregar responsables a una tarea
+# ---------------------------
+@app.post("/proyectos/{proyecto_id}/tareas/{tarea_id}/responsables")
+def agregar_responsables_tarea(
+    proyecto_id: int,
+    tarea_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    payload: ResponsablesAddRequest = Body(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        usuario = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not usuario:
+            return JSONResponse(status_code=404, content={"error": "Usuario (usuario) no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        tarea = db.query(Tarea).filter(Tarea.id == tarea_id, Tarea.id_proyecto == proyecto_id).first()
+        if not tarea:
+            return JSONResponse(status_code=404, content={"error": "Tarea no encontrada en el proyecto"})
+
+        # verificar permiso: dueño o integrante con rol editor
+        autorizado = False
+        if proyecto.id_dueño == usuario.id:
+            autorizado = True
+        else:
+            integrante = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == usuario.id
+            ).first()
+            if integrante and integrante.rol == RolProyecto.editor:
+                autorizado = True
+
+        if not autorizado:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: se requiere rol 'editor' o ser dueño del proyecto"})
+
+        correos_raw = list(set(payload.correos))
+        no_existentes = []
+        no_existentes_en_proyecto = []
+        ya_responsables = []
+        agregados = []
+
+        for mail in correos_raw:
+            m = mail.lower()
+            usuario = db.query(Usuario).filter(Usuario.correo == m).first()
+            if not usuario:
+                no_existentes.append(m)
+                continue
+            
+            existe_en_proyecto = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_usuario == usuario.id,
+                ProyectoIntegrante.id_proyecto == proyecto_id
+            ).first()
+            if not existe_en_proyecto:
+                no_existentes_en_proyecto.append(m)
+                continue
+            
+            existe = db.query(TareaResponsable).filter(
+                TareaResponsable.id_tarea == tarea_id,
+                TareaResponsable.id_usuario == usuario.id
+            ).first()
+            if existe:
+                ya_responsables.append(m)
+                continue
+
+            nuevo = TareaResponsable(
+                id_tarea = tarea_id,
+                id_usuario = usuario.id
+            )
+            db.add(nuevo)
+            agregados.append({"correo": m, "id_usuario": usuario.id, "nombre": usuario.nombre})
+
+        if no_existentes or ya_responsables or no_existentes_en_proyecto:
+            db.rollback()
+            return JSONResponse(status_code=400, content={
+                "error": "Validación fallida",
+                "usuarios_no_existentes": no_existentes,
+                "usuarios_no_existentes_en_proyecto": no_existentes_en_proyecto,
+                "ya_responsables": ya_responsables,
+                "validos": agregados
+            })
+
+        db.commit()
+        return JSONResponse(status_code=201, content={"message": "Responsables agregados", "agregados": agregados})
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+
+# ---------------------------
+# Endpoint: cambiar estado de una tarea
+# ---------------------------
+@app.put("/proyectos/{proyecto_id}/tareas/{tarea_id}/estado")
+def cambiar_estado_tarea(
+    proyecto_id: int,
+    tarea_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    payload: TareaEstadoUpdate = Body(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        actor = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not actor:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        # verificar permiso: dueño o integrante con rol editor
+        autorizado = False
+        if proyecto.id_dueño == actor.id:
+            autorizado = True
+        else:
+            integrante = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == actor.id
+            ).first()
+            if integrante and integrante.rol == RolProyecto.editor:
+                autorizado = True
+
+        if not autorizado:
+            return JSONResponse(status_code=403, content={"error": "No autorizado: se requiere rol 'editor' o ser dueño del proyecto"})
+
+        tarea = db.query(Tarea).filter(Tarea.id == tarea_id, Tarea.id_proyecto == proyecto_id).first()
+        if not tarea:
+            return JSONResponse(status_code=404, content={"error": "Tarea no encontrada en el proyecto"})
+
+        nuevo_estado = payload.estado
+
+
+        try:
+            # intentar por nombre de miembro
+            tarea.estado = EstadoTarea[nuevo_estado]
+        except Exception:
+            # intentar por valor
+            tarea.estado = EstadoTarea(nuevo_estado)
+
+
+        db.commit()
+        db.refresh(tarea)
+
+        return JSONResponse(status_code=200, content={
+            "message": "Estado de la tarea actualizado",
+            "id_tarea": tarea.id,
+            "estado": tarea.estado.value if hasattr(tarea.estado, "value") else str(tarea.estado)
+        })
+
+    except SQLAlchemyError as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
