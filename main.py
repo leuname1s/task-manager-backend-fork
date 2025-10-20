@@ -216,16 +216,6 @@ def listar_proyectos_usuario(x_user_mail: Annotated[str, Header(...)], db: Sessi
 
         resultado: List[dict] = []
 
-        # Proyectos donde es dueño
-        for proyecto in usuario.proyectos_propios:
-            resultado.append({
-                "id": proyecto.id,
-                "nombre_proyecto": proyecto.nombre,
-                "descripcion": proyecto.descripcion,
-                "fecha_finalizacion": proyecto.fecha_limite,
-                "rol_usuario": "dueño"
-            })
-
         # Proyectos donde es integrante (puede solaparse con dueño, se sobreescribe si es dueño)
         for integrante in usuario.proyectos_integrante:
             proj = getattr(integrante, "proyecto", None)
