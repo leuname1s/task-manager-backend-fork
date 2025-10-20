@@ -78,3 +78,11 @@ class ResponsablesAddRequest(BaseModel):
     
 class TareaEstadoUpdate(BaseModel):
     estado: EstadoTarea
+
+class IntegranteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id_usuario: int
+    nombre: str
+    correo: str
+    rol: str

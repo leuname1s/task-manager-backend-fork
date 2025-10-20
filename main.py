@@ -714,6 +714,63 @@ def cambiar_estado_tarea(
         db.rollback()
         return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
     
+@app.get("/proyectos/{proyecto_id}/integrantes", response_model=List[IntegranteResponse])
+def listar_integrantes_proyecto(
+    proyecto_id: int,
+    x_user_mail: Annotated[str, Header(...)],
+    db: Session = Depends(get_db)
+):
+    try:
+        correo = x_user_mail.lower()
+        actor = db.query(Usuario).filter(Usuario.correo == correo).first()
+        if not actor:
+            return JSONResponse(status_code=404, content={"error": "Usuario no encontrado"})
+
+        proyecto = db.query(Proyecto).filter(Proyecto.id == proyecto_id).first()
+        if not proyecto:
+            return JSONResponse(status_code=404, content={"error": "Proyecto no encontrado"})
+
+        # Verificar que el actor sea dueño o integrante del proyecto
+        if proyecto.id_dueño != actor.id:
+            integrante_actor = db.query(ProyectoIntegrante).filter(
+                ProyectoIntegrante.id_proyecto == proyecto_id,
+                ProyectoIntegrante.id_usuario == actor.id
+            ).first()
+            if not integrante_actor:
+                return JSONResponse(status_code=403, content={"error": "No autorizado: no sos integrante del proyecto"})
+
+        integrantes = db.query(ProyectoIntegrante).filter(ProyectoIntegrante.id_proyecto == proyecto_id).all()
+
+        resultado = []
+        for ing in integrantes:
+            usu = getattr(ing, "usuario", None)
+            if not usu:
+                continue
+            resultado.append({
+                "id_usuario": usu.id,
+                "nombre": usu.nombre,
+                "correo": usu.correo,
+                "rol": ing.rol.value if hasattr(ing.rol, "value") else str(ing.rol)
+            })
+
+        # Asegurar que el dueño aparece (por si por alguna razón no está en la tabla integrantes)
+        if not any(r["id_usuario"] == proyecto.id_dueño for r in resultado):
+            dueño = db.query(Usuario).filter(Usuario.id == proyecto.id_dueño).first()
+            if dueño:
+                resultado.append({
+                    "id_usuario": dueño.id,
+                    "nombre": dueño.nombre,
+                    "correo": dueño.correo,
+                    "rol": "dueño"
+                })
+
+        return resultado
+
+    except SQLAlchemyError as e:
+        return JSONResponse(status_code=500, content={"error": "Error de base de datos: " + str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": "Error inesperado: " + str(e)})
+    
 # ---------------------------
 # Endpoint: Root, check api status
 # ---------------------------
