@@ -50,9 +50,9 @@ class Proyecto(Base):
 # ------
 
 class EstadoTarea(enum.Enum):
-    sin_asignar = "sin_asignar"
+    sin_asignar = "sin asignar"
     pendiente = "pendiente"
-    en_progreso = "en_progreso"
+    en_progreso = "en progreso"
     completado = "completado"
 
 class Tarea(Base):
@@ -66,7 +66,6 @@ class Tarea(Base):
     fecha_creacion = Column(DateTime, default=datetime.now)
     fecha_limite = Column(DateTime)
 
-    # Relaciones
     proyecto = relationship("Proyecto", back_populates="tareas")
     responsables = relationship("TareaResponsable", back_populates="tarea", cascade="all, delete-orphan")
     
@@ -97,6 +96,5 @@ class ProyectoIntegrante(Base):
     id_usuario = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"))
     rol = Column(Enum(RolProyecto), nullable=False)
 
-    # Relaciones
     proyecto = relationship("Proyecto", back_populates="integrantes")
     usuario = relationship("Usuario", back_populates="proyectos_integrante")
