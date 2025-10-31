@@ -1,14 +1,12 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from dotenv import load_dotenv
 import os
 
 
 # URL de conexión 
 
-# USER = os.getenv("POSTGRESQL_USER")
-# PASSWORD = os.getenv("POSTGRESQL_PASS") 
-# DATABASE_URL = f"postgresql+psycopg2://{USER}:{PASSWORD}@localhost:5432/taskmanager"
-
+load_dotenv()
 DATABASE_URL = os.getenv("SUPABASE_DB_URL")
 
 # Motor de conexión
@@ -19,5 +17,3 @@ Base = declarative_base()
 
 # Sesión
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-# SessionLocal().close()
